@@ -1,2 +1,2 @@
-neuromeka
 numpy
+matplotlib
