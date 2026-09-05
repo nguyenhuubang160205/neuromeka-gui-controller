@@ -58,15 +58,17 @@ class IOPanel(tk.Frame):
         for _ in range(64):
             try:
                 cb = self._ui_queue.get_nowait()
-                cb()
             except queue.Empty:
                 break
-            except tk.TclError:
-                self._ui_dispatcher_closed = True
-                return
+            try:
+                cb()
             except Exception as e:
                 pass
-        self.after(25, self._drain_ui_queue)
+        if not self._ui_dispatcher_closed:
+            try:
+                self.after(25, self._drain_ui_queue)
+            except Exception:
+                pass
 
     def _get_indy(self):
         if self.robot_panel and getattr(self.robot_panel, 'is_connected', False):
@@ -386,7 +388,7 @@ class IOPanel(tk.Frame):
         while self.running:
             indy = self._get_indy()
             if indy and getattr(self.robot_panel, 'is_connected', False):
-                # Nhường socket nếu đang Jog hoặc đang chạy chu trình
+                # Nhường socket hoàn toàn nếu đang Jog hoặc đang chạy chu trình
                 if getattr(self.robot_panel, 'jog_holding', False) or getattr(self.robot_panel, 'cycle_running', False):
                     time.sleep(0.5)
                     continue
@@ -416,7 +418,7 @@ class IOPanel(tk.Frame):
                                     badge.config(text="OFF", bg="#3d4052", fg="#888899")
                                     if btn:
                                         btn.config(bg=self.accent_gray, text="BẬT (ON)")
-                                        
+                                         
                             # Cập nhật ma trận DI
                             for idx, ind in self.di_indicators.items():
                                 val = self.di_states[idx] if idx < len(self.di_states) else 0
@@ -433,4 +435,4 @@ class IOPanel(tk.Frame):
                         self._post_ui(update_ui)
                 except Exception:
                     pass
-            time.sleep(0.5)
+            time.sleep(0.8)

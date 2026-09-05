@@ -104,12 +104,13 @@ class IndyRobotGUI:
                 break
             try:
                 callback()
-            except tk.TclError:
-                self._ui_dispatcher_closed = True
-                return
             except Exception as exc:
-                print(f"Lỗi cập nhật giao diện chính: {exc}")
-        self.root.after(25, self._drain_ui_queue)
+                pass
+        if not self._ui_dispatcher_closed:
+            try:
+                self.root.after(25, self._drain_ui_queue)
+            except Exception:
+                pass
 
     def toggle_fullscreen(self, event=None):
         self.is_fullscreen = not self.is_fullscreen

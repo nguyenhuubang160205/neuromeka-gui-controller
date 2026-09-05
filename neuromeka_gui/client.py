@@ -100,22 +100,20 @@ class UnifiedIndyClient:
                 
             try:
                 self.client = IndyDCP2(server_ip=self.ip, robot_name="NRMK-Indy7")
-                if hasattr(self.client, 'sock_fd') and self.client.sock_fd:
-                    try:
-                        self.client.sock_fd.settimeout(1.5)
-                    except Exception:
-                        pass
                 if self.client.connect():
                     self.version = 2
                     if hasattr(self.client, 'sock_fd') and self.client.sock_fd:
                         try:
+                            import socket
                             self.client.sock_fd.settimeout(1.5)
+                            self.client.sock_fd.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                         except Exception:
                             pass
-                    time.sleep(0.1)
+                    time.sleep(0.05)
                     return True
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Lỗi kết nối IndyDCP2: {e}")
+                self.client = None
                 
             # Nếu thất bại với V2, thử kết nối nhanh với V3
             try:
@@ -514,224 +512,6 @@ class UnifiedIndyClient:
                     return False
             return False
 
-    def set_do(self, pin: int, state: bool):
-        """Bật/Tắt cổng Digital Output (0..31)"""
-        with self.lock:
-            if self.client:
-                try:
-                    if self.version == 2:
-                        return self._command_ok(self.client.set_do(pin, bool(state)))
-                    elif self.version == 3:
-                        return self._command_ok(self.client.set_do([(pin, bool(state))]))
-                except Exception as e:
-                    print(f"Lỗi set_do {pin}: {e}")
-                    self._flush_socket()
-                    return False
-        return False
-
-    def get_di(self, pin=None):
-        """Đọc 32 ngõ vào Digital Input"""
-        with self.lock:
-            if not self.client:
-                return 0 if pin is not None else [0] * 32
-            try:
-                if self.version == 2:
-                    res = self.client.get_di()
-                    if isinstance(res, (list, tuple)):
-                        dis = [int(v) for v in res[:32]] + [0] * max(0, 32 - len(res[:32]))
-                    elif isinstance(res, int):
-                        dis = [(res >> i) & 1 for i in range(32)]
-                    else:
-                        dis = [0] * 32
-                    if pin is not None:
-                        return dis[pin] if 0 <= pin < len(dis) else 0
-                    return dis
-                elif self.version == 3:
-                    if hasattr(self.client, 'get_di'):
-                        res = self.client.get_di()
-                        if isinstance(res, dict):
-                            if pin is not None:
-                                return int(res.get(pin, 0))
-                            return [int(res.get(i, 0)) for i in range(32)]
-                        elif isinstance(res, (list, tuple)):
-                            dis = [int(v) for v in res[:32]]
-                            if pin is not None:
-                                return dis[pin] if 0 <= pin < len(dis) else 0
-                            return dis
-            except Exception as e:
-                print(f"Lỗi get_di: {e}")
-        return 0 if pin is not None else [0] * 32
-
-    def get_do(self, pin=None):
-        """Đọc 32 ngõ ra Digital Output"""
-        with self.lock:
-            if not self.client:
-                return 0 if pin is not None else [0] * 32
-            try:
-                if self.version == 2:
-                    res = self.client.get_do()
-                    if isinstance(res, (list, tuple)):
-                        dos = [int(v) for v in res[:32]] + [0] * max(0, 32 - len(res[:32]))
-                    elif isinstance(res, int):
-                        dos = [(res >> i) & 1 for i in range(32)]
-                    else:
-                        dos = [0] * 32
-                    if pin is not None:
-                        return dos[pin] if 0 <= pin < len(dos) else 0
-                    return dos
-                elif self.version == 3:
-                    if hasattr(self.client, 'get_do'):
-                        res = self.client.get_do()
-                        if isinstance(res, dict):
-                            if pin is not None:
-                                return int(res.get(pin, 0))
-                            return [int(res.get(i, 0)) for i in range(32)]
-                        elif isinstance(res, (list, tuple)):
-                            dos = [int(v) for v in res[:32]]
-                            if pin is not None:
-                                return dos[pin] if 0 <= pin < len(dos) else 0
-                            return dos
-            except Exception as e:
-                print(f"Lỗi get_do: {e}")
-        return 0 if pin is not None else [0] * 32
-
-
-    def reset_robot(self):
-        with self.lock:
-            if self.client:
-                if self.version == 2:
-                    self.client.reset_robot()
-                elif self.version == 3:
-                    self.client.reset()
-
-    def set_direct_teaching(self, enable: bool):
-        with self.lock:
-            if self.client:
-                try:
-                    if self.version == 2:
-                        if hasattr(self.client, 'direct_teaching'):
-                            self.client.direct_teaching(enable)
-                        elif hasattr(self.client, 'set_direct_teaching'):
-                            self.client.set_direct_teaching(enable)
-                    elif self.version == 3:
-                        if hasattr(self.client, 'set_direct_teaching'):
-                            self.client.set_direct_teaching(enable)
-                        elif hasattr(self.client, 'direct_teaching'):
-                            self.client.direct_teaching(enable)
-                    return True
-                except Exception as e:
-                    print(f"Lỗi Chế độ Cầm tay: {e}")
-                    return False
-            return False
-
-    def set_tool_payload(self, mass: float, cog: list = [0.0, 0.0, 0.05]):
-        """Cài đặt Khối lượng (kg) và Tâm trọng lực CoG [x, y, z] (mét) xuống Tủ điều khiển Robot."""
-        with self.lock:
-            if self.client:
-                try:
-                    if self.version == 2:
-                        self.client.set_tcp_comp([mass, cog[0], cog[1], cog[2], 0.0, 0.0])
-                    elif self.version == 3:
-                        self.client.set_tool_property(
-                            mass=mass,
-                            center_of_mass=cog,
-                            inertia=[0.01, 0.01, 0.01, 0.0, 0.0, 0.0]
-                        )
-                    return True
-                except Exception as e:
-                    print(f"Lỗi thiết lập Tool Payload: {e}")
-                    return False
-            return False
-
-    def set_friction_compensation(self, ctrl_levels: list = [3, 3, 3, 3, 3, 3], dt_levels: list = [5, 5, 5, 5, 5, 5]):
-        """Cấu hình cấp độ bù ma sát khớp (Friction Compensation) cho 6 khớp."""
-        with self.lock:
-            if self.client:
-                try:
-                    if self.version == 3 and hasattr(self.client, 'set_friction_comp'):
-                        self.client.set_friction_comp(
-                            control_comp=True,
-                            control_comp_levels=ctrl_levels,
-                            dt_comp=True,
-                            dt_comp_levels=dt_levels
-                        )
-                        self.client.set_friction_comp_state(True)
-                    return True
-                except Exception as e:
-                    print(f"Lỗi thiết lập Bù ma sát khớp: {e}")
-                    return False
-            return False
-
-    def zero_ft_sensor(self):
-        """Reset / Zero điểm 0 cho cảm biến lực/mô-men (FT Sensor) để triệt trôi khớp 4 & cổ tay."""
-        with self.lock:
-            if self.client:
-                try:
-                    if self.version == 2:
-                        if hasattr(self.client, 'zero_ft_sensor'):
-                            self.client.zero_ft_sensor()
-                        elif hasattr(self.client, 'reset_ft_sensor'):
-                            self.client.reset_ft_sensor()
-                    elif self.version == 3:
-                        if hasattr(self.client, 'zero_ft_sensor'):
-                            self.client.zero_ft_sensor()
-                        elif hasattr(self.client, 'reset_ft_sensor'):
-                            self.client.reset_ft_sensor()
-                        elif hasattr(self.client, 'set_ft_sensor_bias'):
-                            self.client.set_ft_sensor_bias()
-                    return True
-                except Exception as e:
-                    print(f"Lỗi Zero Cảm biến Lực (FT Sensor): {e}")
-                    return False
-            return False
-
-    def auto_estimate_payload(self):
-        """
-        Tự động đo và ước tính Khối lượng Tool (kg) và CoG (mm) 
-        dựa trên phản hồi mô-men khớp / lực cảm biến ở vị trí hiện tại.
-        """
-        with self.lock:
-            if not self.client:
-                return False, 2.0, [0.0, 0.0, 50.0]
-            try:
-                # Nếu tủ Indy hỗ trợ hàm đo tự động nguyên bản
-                if hasattr(self.client, 'measure_payload'):
-                    res = self.client.measure_payload()
-                    if isinstance(res, (list, tuple)) and len(res) >= 4:
-                        return True, float(res[0]), [float(res[1])*1000.0, float(res[2])*1000.0, float(res[3])*1000.0]
-                elif hasattr(self.client, 'get_joint_torque'):
-                    # Đo từ mô-men khớp 4 & 5
-                    torques = self.client.get_joint_torque()
-                    if len(torques) >= 6:
-                        # Ước lượng thô mô-men khớp 4, 5
-                        t4 = abs(torques[3])
-                        t5 = abs(torques[4])
-                        est_mass = round(max(0.5, min(7.0, (t4 + t5) / 9.81 * 0.8)), 2)
-                        return True, est_mass, [0.0, 0.0, 55.0]
-            except Exception as e:
-                print(f"Lỗi tự động ước tính Payload: {e}")
-        
-        # Mặc định an toàn nếu không đo được tự động
-        return True, 2.0, [0.0, 0.0, 50.0]
-
-    def set_tool_frame(self, fpos):
-        """
-        Ghi tọa độ TCP tool frame [x, y, z, rx, ry, rz] xuống Robot Controller.
-        x, y, z tính bằng mét (m), rx, ry, rz tính bằng độ (deg).
-        """
-        with self.lock:
-            if self.client:
-                try:
-                    if self.version == 2:
-                        self.client.set_default_tcp(fpos)
-                    elif self.version == 3:
-                        self.client.set_tool_frame(fpos)
-                    return True
-                except Exception as e:
-                    print(f"Lỗi thiết lập Tool Frame (TCP): {e}")
-                    return False
-            return False
-
     def set_reference_frame(self, fpos):
         """
         Ghi tọa độ Reference Frame (User Frame) [x, y, z, rx, ry, rz] xuống Robot Controller.
@@ -864,26 +644,26 @@ class UnifiedIndyClient:
                     print(f"Lỗi get_collision_level: {e}")
         return 3
 
-    def set_do(self, pin, state):
+    def set_do(self, pin: int, state: bool):
+        """Bật/Tắt cổng Digital Output (0..31)"""
         with self.lock:
             if self.client:
                 try:
                     if self.version == 2:
-                        self.client.set_do(pin, state)
+                        return self._command_ok(self.client.set_do(pin, bool(state)))
                     elif self.version == 3:
-                        self.client.set_do([(pin, bool(state))])
+                        return self._command_ok(self.client.set_do([(pin, bool(state))]))
                 except Exception as e:
-                    print(f"Lỗi set_do: {e}")
+                    print(f"Lỗi set_do {pin}: {e}")
+                    self._flush_socket()
+                    return False
+        return False
 
     def set_digital_output(self, pin, state):
         return self.set_do(pin, state)
 
     def get_di(self, pin=None):
-        """
-        Đọc tín hiệu ngõ vào số (Digital Input).
-        Nếu pin=None, trả về list 32 giá trị [di0, di1, ... di31].
-        Nếu pin là int (0..31), trả về 0 hoặc 1 của pin đó.
-        """
+        """Đọc 32 ngõ vào Digital Input"""
         with self.lock:
             if not self.client:
                 return 0 if pin is not None else [0] * 32
@@ -891,7 +671,7 @@ class UnifiedIndyClient:
                 if self.version == 2:
                     res = self.client.get_di()
                     if isinstance(res, (list, tuple)):
-                        dis = [int(v) for v in res]
+                        dis = [int(v) for v in res[:32]] + [0] * max(0, 32 - len(res[:32]))
                     elif isinstance(res, int):
                         dis = [(res >> i) & 1 for i in range(32)]
                     else:
@@ -907,7 +687,7 @@ class UnifiedIndyClient:
                                 return int(res.get(pin, 0))
                             return [int(res.get(i, 0)) for i in range(32)]
                         elif isinstance(res, (list, tuple)):
-                            dis = [int(v) for v in res]
+                            dis = [int(v) for v in res[:32]]
                             if pin is not None:
                                 return dis[pin] if 0 <= pin < len(dis) else 0
                             return dis
@@ -916,11 +696,7 @@ class UnifiedIndyClient:
         return 0 if pin is not None else [0] * 32
 
     def get_do(self, pin=None):
-        """
-        Đọc trạng thái ngõ ra số (Digital Output).
-        Nếu pin=None, trả về list 32 giá trị [do0, do1, ... do31].
-        Nếu pin là int (0..31), trả về 0 hoặc 1 của pin đó.
-        """
+        """Đọc 32 ngõ ra Digital Output"""
         with self.lock:
             if not self.client:
                 return 0 if pin is not None else [0] * 32
@@ -928,7 +704,7 @@ class UnifiedIndyClient:
                 if self.version == 2:
                     res = self.client.get_do()
                     if isinstance(res, (list, tuple)):
-                        dos = [int(v) for v in res]
+                        dos = [int(v) for v in res[:32]] + [0] * max(0, 32 - len(res[:32]))
                     elif isinstance(res, int):
                         dos = [(res >> i) & 1 for i in range(32)]
                     else:
@@ -944,7 +720,7 @@ class UnifiedIndyClient:
                                 return int(res.get(pin, 0))
                             return [int(res.get(i, 0)) for i in range(32)]
                         elif isinstance(res, (list, tuple)):
-                            dos = [int(v) for v in res]
+                            dos = [int(v) for v in res[:32]]
                             if pin is not None:
                                 return dos[pin] if 0 <= pin < len(dos) else 0
                             return dos
@@ -1009,13 +785,8 @@ class UnifiedIndyClient:
                             st['collision'] = st.get('is_collided', st.get('collision', 0))
                             st['error'] = st.get('is_error_state', st.get('error', 0))
 
-                            try:
-                                servo_actives, _ = self.client.get_servo_state()
-                                servo_on = any(servo_actives) if isinstance(servo_actives, (list, tuple)) else bool(servo_actives)
-                            except Exception:
-                                servo_on = False
-
-                            st['ready'] = 1 if (servo_on and st['emergency'] == 0 and st['error'] == 0 and st['collision'] == 0) else 0
+                            ready_flag = getattr(self.client.robot_status, 'is_robot_ready', 0)
+                            st['ready'] = 1 if (ready_flag and st['emergency'] == 0 and st['error'] == 0 and st['collision'] == 0) else 0
 
                             if st['error'] == 1 or st['emergency'] == 1 or st['collision'] == 1:
                                 st['error_info'] = self.get_last_error_info()

@@ -188,19 +188,20 @@ class RobotControlPanel(tk.Frame):
     def _drain_ui_queue(self):
         if self._ui_dispatcher_closed:
             return
-        for _ in range(32):
+        for _ in range(64):
             try:
                 callback = self._ui_queue.get_nowait()
             except queue.Empty:
                 break
             try:
                 callback()
-            except tk.TclError:
-                self._ui_dispatcher_closed = True
-                return
             except Exception as exc:
-                print(f"Lỗi cập nhật UI {self.panel_name}: {exc}")
-        self.after(25, self._drain_ui_queue)
+                pass
+        if not self._ui_dispatcher_closed:
+            try:
+                self.after(25, self._drain_ui_queue)
+            except Exception:
+                pass
 
     def create_widgets(self):
         # 1. TIÊU ĐỀ BẢNG ĐIỀU KHIỂN
@@ -574,7 +575,7 @@ class RobotControlPanel(tk.Frame):
                         import subprocess, re
                         out = subprocess.check_output("arp -a", shell=True, timeout=2.0).decode('utf-8', errors='ignore')
                         for line in out.splitlines():
-                            if "00-e0-4c-68-04-78" in line.lower() or "00:e0:4c:68:04:78" in line.lower():
+                            if "00-e0-4c-68-04-78" in line.lower() or "00:e0:4c:68:04:78" in line.lower() or "1c-fd-08-70-19-c3" in line.lower() or "1c:fd:08:70:19:c3" in line.lower():
                                 m = re.search(r'(\d+\.\d+\.\d+\.\d+)', line)
                                 if m and m.group(1) != ip:
                                     detected = m.group(1)
@@ -588,12 +589,13 @@ class RobotControlPanel(tk.Frame):
                         pass
 
                 if self.indy and self.indy.client:
-                    self.is_connected = True
+                    # Cấu hình ban đầu an toàn, tuần tự
                     try:
-                        self.servo_on()
-                        self.indy.set_collision_level(2)
+                        self.indy.set_collision_level(1)
                     except Exception:
                         pass
+
+                    self.is_connected = True
                     def ui_success():
                         self.lbl_status.config(text=f"CONNECTED (v{self.indy.version})", fg=self.accent_green)
                         self.btn_connect.config(state="disabled", text="Connected")
@@ -640,8 +642,21 @@ class RobotControlPanel(tk.Frame):
 
     def destroy_panel(self):
         self.running = False
+        self.cycle_running = False
+        self._jog_stop_event.set()
+        self._jog_generation += 1
+        self.jog_holding = False
+        self.jog_active = False
+        self.is_connected = False
         self._ui_dispatcher_closed = True
-        self.disconnect_robot()
+        client = self.indy
+        self.indy = None
+        if client:
+            threading.Thread(
+                target=client.disconnect,
+                daemon=True,
+                name=f"{self.panel_name}-shutdown"
+            ).start()
 
     def disconnect_robot(self):
         self.on_jog_release()
@@ -1602,9 +1617,9 @@ class RobotControlPanel(tk.Frame):
         consecutive_err_count = 0
         while self.running:
             if self.is_connected and self.indy:
-                # Nhường socket cho luồng Jog khi đang giữ nút
-                if self.jog_holding:
-                    time.sleep(0.3)
+                # Nhường socket cho luồng Jog hoặc chu trình tự động
+                if self.jog_holding or self.cycle_running:
+                    time.sleep(0.35)
                     continue
                 try:
                     state_data = self.indy.get_all_states()
@@ -1635,7 +1650,7 @@ class RobotControlPanel(tk.Frame):
                                     span = max_lim - min_lim
                                     
                                     val_clamped = max(min_lim, min(max_lim, val))
-                                    pct = (val_clamped - min_lim) / span
+                                    pct = (val_clamped - min_lim) / span if span > 0 else 0.5
                                     cw = max(100, canvas.winfo_width())
                                     bar_w = cw - 20
                                     x_val = 10 + pct * bar_w
@@ -1707,37 +1722,17 @@ class RobotControlPanel(tk.Frame):
                         self._post_ui(update_ui)
                     else:
                         consecutive_err_count += 1
-                        if consecutive_err_count >= 3:
-                            print("Phát hiện mất kết nối socket quá 3 lần liên tiếp! Chuyển về trạng thái Disconnect...")
+                        if consecutive_err_count >= 5:
+                            print("Phát hiện mất phản hồi socket quá 5 lần liên tiếp! Chuyển về trạng thái Disconnect...")
                             self.is_connected = False
                             self._post_ui(self.disconnect_robot)
                 except Exception as e:
-                    print(f"Lỗi vòng lặp cập nhật: {e}")
                     consecutive_err_count += 1
-                    if consecutive_err_count >= 3 or any(x in str(e).lower() for x in ["10054", "10038", "forcibly closed", "connection reset"]):
-                        print("Phát hiện mất kết nối mạng TCP cứng! Chuyển về trạng thái Disconnect...")
+                    if consecutive_err_count >= 5 or any(x in str(e).lower() for x in ["10054", "10038", "forcibly closed", "connection reset"]):
+                        print(f"Phát hiện mất kết nối mạng TCP: {e}. Chuyển về trạng thái Disconnect...")
                         self.is_connected = False
                         self._post_ui(self.disconnect_robot)
-            # 2 Hz là đủ cho HMI, giảm mạnh tải so với 4 request mỗi 150 ms.
-            time.sleep(0.5)
-
-    def destroy_panel(self):
-        self.running = False
-        self.cycle_running = False
-        self._jog_stop_event.set()
-        self._jog_generation += 1
-        self.jog_holding = False
-        self.jog_active = False
-        self.is_connected = False
-        self._ui_dispatcher_closed = True
-        client = self.indy
-        self.indy = None
-        if client:
-            threading.Thread(
-                target=client.disconnect,
-                daemon=True,
-                name=f"{self.panel_name}-shutdown"
-            ).start()
+            time.sleep(0.35)
 
     def open_error_details_dialog(self):
         err_info = getattr(self, 'last_error_info', None)
