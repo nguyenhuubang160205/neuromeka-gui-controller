@@ -382,28 +382,40 @@ class IndyRobotGUI:
         self.running = False
         self._ui_dispatcher_closed = True
 
-        def finish_destroy():
-            try:
-                if hasattr(self, 'program_panel'):
-                    if self.program_panel.program_interpreter:
-                        self.program_panel.program_interpreter.stop()
-                    if self.program_panel.python_runner:
-                        self.program_panel.python_runner.stop_script()
-            except Exception:
-                pass
-            try:
-                if hasattr(self, 'io_panel'):
-                    self.io_panel.running = False
-                    self.io_panel._ui_dispatcher_closed = True
-            except Exception:
-                pass
-            try:
-                self.robot_panel.destroy_panel()
-            except Exception:
-                pass
-            try:
-                self.root.destroy()
-            except Exception:
-                pass
+        # Dừng interpreter & python runner nếu đang chạy
+        try:
+            if hasattr(self, 'program_panel'):
+                if self.program_panel.program_interpreter:
+                    self.program_panel.program_interpreter.stop()
+                if self.program_panel.python_runner:
+                    self.program_panel.python_runner.stop_script()
+        except Exception:
+            pass
 
-        threading.Thread(target=finish_destroy, daemon=True, name="app-destroy").start()
+        # Dừng luồng giám sát I/O
+        try:
+            if hasattr(self, 'io_panel'):
+                self.io_panel.running = False
+                self.io_panel._ui_dispatcher_closed = True
+        except Exception:
+            pass
+
+        # Dừng robot_panel và các luồng điều khiển
+        try:
+            if hasattr(self, 'robot_panel'):
+                self.robot_panel.destroy_panel()
+        except Exception:
+            pass
+
+        # Đảm bảo nhả toàn bộ socket TCP / gRPC đến robot ngay lập tức
+        try:
+            from client import shutdown_all_clients
+            shutdown_all_clients()
+        except Exception:
+            pass
+
+        # Đóng cửa sổ giao diện Tkinter
+        try:
+            self.root.destroy()
+        except Exception:
+            pass

@@ -3,6 +3,10 @@ import sys
 import threading
 import time
 
+import socket
+import atexit
+import signal
+
 try:
     from neuromeka import IndyDCP2
 except Exception as _e2:
@@ -12,6 +16,62 @@ try:
     from neuromeka import IndyDCP3
 except Exception as _e3:
     IndyDCP3 = None
+
+
+# Quản lý toàn bộ client đang kết nối để giải phóng dứt điểm khi tắt ứng dụng
+_active_clients_lock = threading.Lock()
+_active_clients = set()
+
+
+def _register_client(client):
+    with _active_clients_lock:
+        _active_clients.add(client)
+
+
+def _unregister_client(client):
+    with _active_clients_lock:
+        _active_clients.discard(client)
+
+
+def shutdown_all_clients():
+    """Đóng dứt điểm toàn bộ socket/channel của tất cả client Indy đang hoạt động để tránh nghẽn socket."""
+    with _active_clients_lock:
+        clients = list(_active_clients)
+        _active_clients.clear()
+    for c in clients:
+        try:
+            c.disconnect()
+        except Exception as e:
+            print(f"Lỗi khi tự động giải phóng client: {e}")
+
+
+# Tự động ngắt kết nối khi tiến trình Python kết thúc
+atexit.register(shutdown_all_clients)
+
+
+def _signal_handler(signum, frame):
+    try:
+        shutdown_all_clients()
+    finally:
+        signal.signal(signum, signal.SIG_DFL)
+        sys.exit(0)
+
+
+try:
+    signal.signal(signal.SIGINT, _signal_handler)
+except Exception:
+    pass
+
+try:
+    signal.signal(signal.SIGTERM, _signal_handler)
+except Exception:
+    pass
+
+if hasattr(signal, 'SIGBREAK'):
+    try:
+        signal.signal(signal.SIGBREAK, _signal_handler)
+    except Exception:
+        pass
 
 
 # Vá lỗi parse_robot_status của Neuromeka SDK để đọc đúng chính xác 100% bitmask từ Controller
@@ -104,11 +164,11 @@ class UnifiedIndyClient:
                     self.version = 2
                     if hasattr(self.client, 'sock_fd') and self.client.sock_fd:
                         try:
-                            import socket
                             self.client.sock_fd.settimeout(1.5)
                             self.client.sock_fd.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                         except Exception:
                             pass
+                    _register_client(self)
                     time.sleep(0.05)
                     return True
             except Exception as e:
@@ -120,6 +180,7 @@ class UnifiedIndyClient:
                 self.client = IndyDCP3(robot_ip=self.ip)
                 self.client.get_robot_data()
                 self.version = 3
+                _register_client(self)
                 return True
             except Exception as e:
                 print(f"Lỗi kết nối gRPC IndyDCP3: {e}")
@@ -129,25 +190,30 @@ class UnifiedIndyClient:
             return False
 
     def disconnect(self):
-        # Đóng socket/channel trước (KHÔNG dùng lock) để giải phóng các lệnh đang bị block
-        import socket
+        # Bỏ đăng ký khỏi danh sách quản lý toàn cục ngay lập tức
+        _unregister_client(self)
         self._disconnecting = True
+
+        # Đóng socket/channel trước (KHÔNG dùng lock) để giải phóng các lệnh đang bị block
         if self.client:
             try:
                 if self.version == 2:
                     if hasattr(self.client, 'sock_fd') and self.client.sock_fd:
                         try:
                             self.client.sock_fd.shutdown(socket.SHUT_RDWR)
-                        except:
+                        except Exception:
                             pass
-                        self.client.sock_fd.close()
+                        try:
+                            self.client.sock_fd.close()
+                        except Exception:
+                            pass
                 elif self.version == 3:
-                    if hasattr(self.client, 'boot_channel') and self.client.boot_channel:
-                        self.client.boot_channel.close()
-                    if hasattr(self.client, 'control_channel') and self.client.control_channel:
-                        self.client.control_channel.close()
-                    if hasattr(self.client, 'device_channel') and self.client.device_channel:
-                        self.client.device_channel.close()
+                    for ch_name in ('boot_channel', 'control_channel', 'device_channel', 'config_channel', 'rtde_channel', 'cri_channel'):
+                        if hasattr(self.client, ch_name) and getattr(self.client, ch_name):
+                            try:
+                                getattr(self.client, ch_name).close()
+                            except Exception:
+                                pass
             except Exception:
                 pass
 
@@ -155,16 +221,16 @@ class UnifiedIndyClient:
             if self.client:
                 try:
                     if self.version == 2:
-                        self.client.disconnect()
+                        try:
+                            self.client.disconnect()
+                        except Exception:
+                            pass
                     elif self.version == 3:
                         # Đảm bảo tắt servo và đóng kết nối channel
                         try:
                             self.client.set_servo_all(False)
-                        except:
+                        except Exception:
                             pass
-                        if hasattr(self.client, 'config_channel'): self.client.config_channel.close()
-                        if hasattr(self.client, 'rtde_channel'): self.client.rtde_channel.close()
-                        if hasattr(self.client, 'cri_channel'): self.client.cri_channel.close()
                 except Exception:
                     pass
                 self.client = None

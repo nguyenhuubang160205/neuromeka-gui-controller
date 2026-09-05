@@ -652,11 +652,10 @@ class RobotControlPanel(tk.Frame):
         client = self.indy
         self.indy = None
         if client:
-            threading.Thread(
-                target=client.disconnect,
-                daemon=True,
-                name=f"{self.panel_name}-shutdown"
-            ).start()
+            try:
+                client.disconnect()
+            except Exception:
+                pass
 
     def disconnect_robot(self):
         self.on_jog_release()
